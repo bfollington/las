@@ -1,1 +1,5 @@
 /target
+.DS_Store
+.claude/blackboard.db
+.claude/blackboard.db-wal
+.claude/blackboard.db-shm
