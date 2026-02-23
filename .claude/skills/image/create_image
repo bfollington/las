@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# create_image — Generate an image from a text prompt using Gemini.
+#
+# Usage:
+#   create_image <prompt> <output_image> [aspect_ratio] [image_size]
+#
+# Arguments:
+#   prompt         The text prompt describing the image to generate
+#   output_image   Path for the final .webp output
+#   aspect_ratio   Optional (e.g., "4:3", "16:9"). Omit to skip.
+#   image_size     Optional (e.g., "1K", "2K", "4K"). Defaults to "2K".
+#
+# Requires:
+#   - GEMINI_API_KEY environment variable
+#   - curl, jq on PATH
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ENDPOINT="https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent"
+
+if [[ $# -lt 2 ]]; then
+  echo "Usage: $(basename "$0") <prompt> <output_image> [aspect_ratio] [image_size]" >&2
+  exit 1
+fi
+
+PROMPT="$1"
+OUTPUT_IMAGE="$2"
+ASPECT_RATIO="${3:-}"
+IMAGE_SIZE="${4:-2K}"
+
+if [[ -z "${GEMINI_API_KEY:-}" ]]; then
+  echo "Error: GEMINI_API_KEY is not set." >&2
+  exit 1
+fi
+
+# Temp files (cleaned up on exit)
+RESP_FILE="$(mktemp "${TMPDIR:-/tmp}/nb_resp.XXXXXX.json")"
+PNG_FILE="$(mktemp "${TMPDIR:-/tmp}/nb_out.XXXXXX.png")"
+trap 'rm -f "$RESP_FILE" "$PNG_FILE"' EXIT
+
+# Build imageConfig
+IMAGE_CONFIG=""
+if [[ -n "$ASPECT_RATIO" ]]; then
+  IMAGE_CONFIG=$(jq -n --arg ar "$ASPECT_RATIO" --arg sz "$IMAGE_SIZE" \
+    '{"aspectRatio": $ar, "imageSize": $sz}')
+else
+  IMAGE_CONFIG=$(jq -n --arg sz "$IMAGE_SIZE" '{"imageSize": $sz}')
+fi
+
+# Build request and call API
+jq -n --arg prompt "$PROMPT" --argjson imgcfg "$IMAGE_CONFIG" '{
+  "contents": [{"parts": [{"text": $prompt}]}],
+  "generationConfig": {
+    "responseModalities": ["TEXT", "IMAGE"],
+    "imageConfig": $imgcfg
+  }
+}' \
+  | curl -s -X POST "$ENDPOINT" \
+      -H "x-goog-api-key: ${GEMINI_API_KEY}" \
+      -H "Content-Type: application/json" \
+      -d @- -o "$RESP_FILE"
+
+# Extract image from response
+"$SCRIPT_DIR/extract_image" "$RESP_FILE" "$PNG_FILE"
+
+# Convert to webp
+"$SCRIPT_DIR/convert_to_webp" "$PNG_FILE" "$OUTPUT_IMAGE"
+
+echo "Saved generated image to: $OUTPUT_IMAGE"

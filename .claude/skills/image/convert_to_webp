@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+IN_FILE="$1"
+OUT_FILE="$2"
+
+if [[ "${DEBUG:-0}" == "1" ]]; then
+  cwebp -preset drawing "$IN_FILE" -o "$OUT_FILE"
+else
+  cwebp -preset drawing "$IN_FILE" -o "$OUT_FILE" > /dev/null 2>&1
+fi
