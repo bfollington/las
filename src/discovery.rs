@@ -275,16 +275,8 @@ mod tests {
         fs::create_dir(&commands_dir).unwrap();
 
         // Create two scripts at root level
-        create_executable(
-            &commands_dir.join("hello.sh"),
-            "#!/bin/bash\necho hello\n",
-        )
-        .unwrap();
-        create_executable(
-            &commands_dir.join("world.sh"),
-            "#!/bin/bash\necho world\n",
-        )
-        .unwrap();
+        create_executable(&commands_dir.join("hello.sh"), "#!/bin/bash\necho hello\n").unwrap();
+        create_executable(&commands_dir.join("world.sh"), "#!/bin/bash\necho world\n").unwrap();
 
         let tree = discover(&commands_dir).unwrap();
 
@@ -400,10 +392,7 @@ mod tests {
             CommandTree::Group {
                 description, order, ..
             } => {
-                assert_eq!(
-                    description.as_deref(),
-                    Some("Database management commands")
-                );
+                assert_eq!(description.as_deref(), Some("Database management commands"));
                 assert_eq!(order.as_ref().unwrap(), &vec!["migrate", "seed"]);
             }
             _ => panic!("expected group"),

@@ -50,10 +50,7 @@ pub fn run_before_hooks(
     for hooks_path in hooks {
         let mut cmd = Command::new(shell);
         cmd.arg("-c")
-            .arg(format!(
-                "source '{}' && before",
-                hooks_path.display()
-            ));
+            .arg(format!("source '{}' && before", hooks_path.display()));
 
         // Set the same environment variables as the command would receive
         for (key, value) in &parsed.env_args {
@@ -100,12 +97,11 @@ pub fn run_after_hooks(
 ) -> Result<()> {
     for hooks_path in hooks {
         let mut cmd = Command::new(shell);
-        cmd.arg("-c")
-            .arg(format!(
-                "source '{}' && after {}",
-                hooks_path.display(),
-                exit_code
-            ));
+        cmd.arg("-c").arg(format!(
+            "source '{}' && after {}",
+            hooks_path.display(),
+            exit_code
+        ));
 
         // Set the same environment variables as the command received
         for (key, value) in &parsed.env_args {

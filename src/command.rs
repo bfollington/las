@@ -1,16 +1,18 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ArgDef {
     pub name: String,
     pub description: Option<String>,
     pub required: bool,
+    /// If true, this (last) argument collects all remaining positional words.
+    pub variadic: bool,
     pub default: Option<String>,
     pub choices: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FlagDef {
     pub name: String,
     pub description: Option<String>,
@@ -22,10 +24,16 @@ pub struct FlagDef {
     pub choices: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CommandDef {
     pub name: String,
     pub description: Option<String>,
+    /// Free-form usage text (examples, caveats) shown in help and the skill doc.
+    pub usage: Option<String>,
+    /// Remediation hint printed when the command exits nonzero.
+    pub on_failure: Option<String>,
+    /// Files the command produces; pointers are printed after a successful run.
+    pub artifacts: Vec<String>,
     pub script_path: PathBuf,
     pub args: Vec<ArgDef>,
     pub flags: Vec<FlagDef>,
@@ -90,6 +98,7 @@ mod tests {
                 name: "env".into(),
                 description: Some("Target environment".into()),
                 required: true,
+                variadic: false,
                 default: None,
                 choices: Some(vec!["staging".into(), "production".into()]),
             }],
@@ -101,7 +110,7 @@ mod tests {
                 default: None,
                 choices: None,
             }],
-            stdin: None,
+            ..Default::default()
         };
         assert_eq!(cmd.name, "deploy");
         assert_eq!(cmd.args.len(), 1);
@@ -120,7 +129,7 @@ mod tests {
                 script_path: PathBuf::from("zebra.sh"),
                 args: vec![],
                 flags: vec![],
-                stdin: None,
+                ..Default::default()
             }),
         );
         root.insert(
@@ -131,7 +140,7 @@ mod tests {
                 script_path: PathBuf::from("alpha.sh"),
                 args: vec![],
                 flags: vec![],
-                stdin: None,
+                ..Default::default()
             }),
         );
 
@@ -151,7 +160,7 @@ mod tests {
                 script_path: PathBuf::from(".commands/db/migrate.sh"),
                 args: vec![],
                 flags: vec![],
-                stdin: None,
+                ..Default::default()
             }),
         );
         root.insert("db", db);

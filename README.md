@@ -45,6 +45,12 @@ A command is a single executable `.sh` file with optional YAML frontmatter:
 #!/bin/bash
 #---
 # description: Deploy the app to a target environment
+# usage: |
+#   las deploy staging            # deploy latest to staging
+#   las deploy production v1.2.3 --dry-run
+# on-failure: Check `kubectl get pods` — a stuck rollout is the usual culprit.
+# artifacts:
+#   - /tmp/deploy.log
 # args:
 #   env:
 #     description: Target environment
@@ -71,6 +77,21 @@ fi
 
 echo "Deploying $ARG_VERSION to $ARG_ENV..."
 ```
+
+The optional documentation fields all surface where they're needed:
+
+- `usage:` — free-form examples and caveats, rendered verbatim in `las <cmd> --help` and the
+  `--skill` document. This is the densest documentation an agent gets — make examples copy-pasteable.
+- `on-failure:` — a one-line remediation hint printed to stderr (`hint: ...`) whenever the
+  command exits nonzero, so failures explain how to recover at the failure site.
+- `artifacts:` — files the command produces. After a successful run, `las` prints a
+  `-> /path/to/file` pointer for each, telling the caller what to read next.
+- `variadic: true` on the **last** argument makes it collect all remaining words
+  (`ARG_NAME` gets them space-joined; `$1`, `$2`, … still see individual words). Usage lines
+  render it as `<name>...`.
+
+Mistype a command name and `las` suggests the closest matches plus the full command list,
+so a typo costs one glance instead of a round-trip through `--list`.
 
 No frontmatter? That's fine too:
 

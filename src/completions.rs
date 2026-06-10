@@ -1,12 +1,15 @@
-use crate::command::{CommandTree, CommandDef};
-use anyhow::{anyhow, Result};
+use crate::command::{CommandDef, CommandTree};
+use anyhow::{Result, anyhow};
 
 pub fn generate_completions(shell: &str, tree: &CommandTree, name: &str) -> Result<String> {
     match shell {
         "bash" => Ok(generate_bash(tree, name)),
         "zsh" => Ok(generate_zsh(tree, name)),
         "fish" => Ok(generate_fish(tree, name)),
-        _ => Err(anyhow!("unsupported shell: {}. Supported: bash, zsh, fish", shell)),
+        _ => Err(anyhow!(
+            "unsupported shell: {}. Supported: bash, zsh, fish",
+            shell
+        )),
     }
 }
 
@@ -25,7 +28,10 @@ fn generate_bash(tree: &CommandTree, name: &str) -> String {
         }
     }
 
-    script.push_str(&format!("    local commands=\"{}\"\n\n", commands.join(" ")));
+    script.push_str(&format!(
+        "    local commands=\"{}\"\n\n",
+        commands.join(" ")
+    ));
 
     // Generate case statement for each command
     script.push_str("    case \"${COMP_WORDS[1]}\" in\n");
@@ -38,12 +44,20 @@ fn generate_bash(tree: &CommandTree, name: &str) -> String {
                 CommandTree::Leaf(cmd) => {
                     script.push_str(&generate_bash_command_completion(cmd));
                 }
-                CommandTree::Group { children: subcommands, .. } => {
+                CommandTree::Group {
+                    children: subcommands,
+                    ..
+                } => {
                     // For groups, complete subcommand names
                     let subcommand_names: Vec<String> = subcommands.keys().cloned().collect();
-                    script.push_str(&format!("            local subcommands=\"{}\"\n", subcommand_names.join(" ")));
+                    script.push_str(&format!(
+                        "            local subcommands=\"{}\"\n",
+                        subcommand_names.join(" ")
+                    ));
                     script.push_str("            if [[ $cword -eq 2 ]]; then\n");
-                    script.push_str("                COMPREPLY=($(compgen -W \"$subcommands\" -- \"$cur\"))\n");
+                    script.push_str(
+                        "                COMPREPLY=($(compgen -W \"$subcommands\" -- \"$cur\"))\n",
+                    );
                     script.push_str("            fi\n");
                 }
             }
@@ -77,12 +91,18 @@ fn generate_bash_command_completion(cmd: &CommandDef) -> String {
     }
 
     if !flags.is_empty() {
-        completion.push_str(&format!("            local flags=\"{}\"\n", flags.join(" ")));
+        completion.push_str(&format!(
+            "            local flags=\"{}\"\n",
+            flags.join(" ")
+        ));
     }
 
     // If first arg has choices, include them
     if let Some(first_arg) = cmd.args.first().and_then(|arg| arg.choices.as_ref()) {
-        completion.push_str(&format!("            local arg_choices=\"{}\"\n", first_arg.join(" ")));
+        completion.push_str(&format!(
+            "            local arg_choices=\"{}\"\n",
+            first_arg.join(" ")
+        ));
     }
 
     // Complete flags or first arg
@@ -92,7 +112,8 @@ fn generate_bash_command_completion(cmd: &CommandDef) -> String {
     }
     completion.push_str("            elif [[ $cword -eq 2 ]]; then\n");
     if cmd.args.first().is_some_and(|arg| arg.choices.is_some()) {
-        completion.push_str("                COMPREPLY=($(compgen -W \"$arg_choices\" -- \"$cur\"))\n");
+        completion
+            .push_str("                COMPREPLY=($(compgen -W \"$arg_choices\" -- \"$cur\"))\n");
     }
     completion.push_str("            fi\n");
 
@@ -139,16 +160,24 @@ fn generate_zsh(tree: &CommandTree, name: &str) -> String {
                 CommandTree::Leaf(cmd) => {
                     script.push_str(&generate_zsh_command_completion(cmd));
                 }
-                CommandTree::Group { children: subcommands, .. } => {
+                CommandTree::Group {
+                    children: subcommands,
+                    ..
+                } => {
                     script.push_str("                    local -a subcommands\n");
                     script.push_str("                    subcommands=(\n");
                     for (subcmd_name, subcmd) in subcommands {
                         let description = match subcmd {
                             CommandTree::Leaf(cmd) => cmd.description.as_deref().unwrap_or(""),
-                            CommandTree::Group { description, .. } => description.as_deref().unwrap_or(""),
+                            CommandTree::Group { description, .. } => {
+                                description.as_deref().unwrap_or("")
+                            }
                         };
                         let escaped_desc = description.replace(':', "\\:");
-                        script.push_str(&format!("                        '{}:{}'\n", subcmd_name, escaped_desc));
+                        script.push_str(&format!(
+                            "                        '{}:{}'\n",
+                            subcmd_name, escaped_desc
+                        ));
                     }
                     script.push_str("                    )\n");
                     script.push_str("                    _describe 'subcommand' subcommands\n");
@@ -188,8 +217,7 @@ fn generate_zsh_command_completion(cmd: &CommandDef) -> String {
         } else {
             completion.push_str(&format!(
                 "                        '{}:{}:'",
-                position,
-                arg_name
+                position, arg_name
             ));
         }
 
@@ -218,16 +246,14 @@ fn generate_zsh_command_completion(cmd: &CommandDef) -> String {
             } else {
                 completion.push_str(&format!(
                     "                        '--{}[{}]:value:'",
-                    flag_name,
-                    escaped_desc
+                    flag_name, escaped_desc
                 ));
             }
         } else {
             // Boolean flag
             completion.push_str(&format!(
                 "                        '--{}[{}]'",
-                flag_name,
-                escaped_desc
+                flag_name, escaped_desc
             ));
         }
 
@@ -270,12 +296,17 @@ fn generate_fish(tree: &CommandTree, name: &str) -> String {
                 CommandTree::Leaf(cmd) => {
                     script.push_str(&generate_fish_command_completion(name, cmd_name, cmd));
                 }
-                CommandTree::Group { children: subcommands, .. } => {
+                CommandTree::Group {
+                    children: subcommands,
+                    ..
+                } => {
                     // Add subcommands
                     for (subcmd_name, subcmd) in subcommands {
                         let description = match subcmd {
                             CommandTree::Leaf(cmd) => cmd.description.as_deref().unwrap_or(""),
-                            CommandTree::Group { description, .. } => description.as_deref().unwrap_or(""),
+                            CommandTree::Group { description, .. } => {
+                                description.as_deref().unwrap_or("")
+                            }
                         };
 
                         script.push_str(&format!(
@@ -348,6 +379,7 @@ mod tests {
                 name: "env".to_string(),
                 description: Some("Environment".to_string()),
                 required: true,
+                variadic: false,
                 default: None,
                 choices: Some(vec!["staging".to_string(), "production".to_string()]),
             }],
@@ -359,7 +391,7 @@ mod tests {
                 default: None,
                 choices: None,
             }],
-            stdin: None,
+            ..Default::default()
         };
 
         root.insert("deploy", CommandTree::Leaf(deploy_cmd));
@@ -378,7 +410,7 @@ mod tests {
             script_path: PathBuf::from(".commands/db/migrate.sh"),
             args: vec![],
             flags: vec![],
-            stdin: None,
+            ..Default::default()
         };
 
         if let CommandTree::Group { children, .. } = &mut db_group {
@@ -435,7 +467,12 @@ mod tests {
         let result = generate_completions("powershell", &tree, "las");
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("unsupported shell"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported shell")
+        );
     }
 
     #[test]

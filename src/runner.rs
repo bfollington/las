@@ -36,9 +36,7 @@ pub fn run(cmd: &CommandDef, parsed: &ParsedArgs, shell: &str) -> Result<i32> {
     process.stderr(Stdio::inherit());
 
     // Spawn and wait for the process
-    let status = process
-        .status()
-        .context("Failed to execute script")?;
+    let status = process.status().context("Failed to execute script")?;
 
     // Return the exit code
     if let Some(code) = status.code() {
@@ -99,7 +97,7 @@ mod tests {
             script_path,
             args: vec![],
             flags: vec![],
-            stdin: None,
+            ..Default::default()
         };
 
         let parsed = ParsedArgs {
@@ -124,7 +122,7 @@ mod tests {
             script_path,
             args: vec![],
             flags: vec![],
-            stdin: None,
+            ..Default::default()
         };
 
         let parsed = ParsedArgs {
@@ -158,11 +156,12 @@ fi
                 name: "name".into(),
                 description: None,
                 required: true,
+                variadic: false,
                 default: None,
                 choices: None,
             }],
             flags: vec![],
-            stdin: None,
+            ..Default::default()
         };
 
         let mut env_args = HashMap::new();
@@ -204,7 +203,7 @@ fi
                 default: None,
                 choices: None,
             }],
-            stdin: None,
+            ..Default::default()
         };
 
         let mut env_flags = HashMap::new();
@@ -239,7 +238,7 @@ fi
             script_path,
             args: vec![],
             flags: vec![],
-            stdin: None,
+            ..Default::default()
         };
 
         let parsed = ParsedArgs {
@@ -278,7 +277,7 @@ fi
                 default: None,
                 choices: None,
             }],
-            stdin: None,
+            ..Default::default()
         };
 
         let mut env_flags = HashMap::new();
