@@ -29,6 +29,12 @@ pub fn format_top_level_help(tree: &CommandTree, commands_dir: &Path, name: &str
         "  --sync              Write skill document to .claude/skills/ for agent auto-discovery\n",
     );
     output.push_str("  --json              Print all command metadata as JSON\n");
+    output.push_str(
+        "  --suggest           Report command usage + repeated shell commands worth extracting\n",
+    );
+    output.push_str(
+        "  --observe [cmd]     Record an external shell command for --suggest (args or stdin)\n",
+    );
     output.push_str("  --completions <sh>  Generate shell completions\n");
     output.push_str("  --config            Show configuration\n");
     output.push('\n');

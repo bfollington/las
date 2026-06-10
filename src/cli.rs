@@ -26,9 +26,16 @@ pub fn run() -> Result<i32> {
 /// Run with explicit args (for testing)
 pub fn run_with_args(args: &[String]) -> Result<i32> {
     // Find the .commands directory
-    let commands_dir = find_commands_dir(&env::current_dir()?).context(
-        "No .commands directory found. Run this from a project with a .commands/ directory.",
-    )?;
+    let Some(commands_dir) = find_commands_dir(&env::current_dir()?) else {
+        // --observe is wired into agent hooks that fire in every project;
+        // outside a las project it must be a silent no-op, not an error.
+        if args.first().map(String::as_str) == Some("--observe") {
+            return Ok(0);
+        }
+        anyhow::bail!(
+            "No .commands directory found. Run this from a project with a .commands/ directory."
+        );
+    };
 
     run_with_context(args, &commands_dir)
 }
@@ -160,7 +167,15 @@ pub fn run_with_context(args: &[String], commands_dir: &Path) -> Result<i32> {
                     }
 
                     // Run command
+                    let start = std::time::Instant::now();
                     let exit_code = runner::run(cmd, &parsed, shell)?;
+                    crate::history::record_run(
+                        commands_dir,
+                        &cmd_path,
+                        &remaining,
+                        exit_code,
+                        start.elapsed().as_millis() as u64,
+                    );
 
                     // Run after hooks
                     hooks::run_after_hooks(&hook_files, &parsed, shell, exit_code)?;
@@ -314,6 +329,36 @@ fn handle_meta_command(flag: &str, remaining: &[String], commands_dir: &Path) ->
         "--json" => {
             let tree = discover(commands_dir)?;
             println!("{}", crate::json::generate_json(&tree, commands_dir, name));
+            Ok(0)
+        }
+        "--observe" => {
+            let input = if remaining.is_empty() {
+                use std::io::{IsTerminal, Read};
+                let mut stdin = std::io::stdin();
+                if stdin.is_terminal() {
+                    eprintln!(
+                        "las: --observe records a shell command: pass it as arguments or pipe it (or hook JSON) on stdin"
+                    );
+                    return Ok(2);
+                }
+                let mut buffer = String::new();
+                let _ = stdin.read_to_string(&mut buffer);
+                buffer
+            } else {
+                remaining.join(" ")
+            };
+
+            if let Some(command) = crate::history::parse_observed(&input) {
+                crate::history::record_external(commands_dir, name, &command);
+            }
+            Ok(0)
+        }
+        "--suggest" => {
+            let tree = discover(commands_dir)?;
+            print!(
+                "{}",
+                crate::history::generate_suggest(&tree, commands_dir, name)
+            );
             Ok(0)
         }
         "--completions" => {
@@ -793,6 +838,54 @@ echo "hello $ARG_NAME"
         let tree = discover(&commands_dir).unwrap();
         let count = count_commands(&tree);
         assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_running_command_records_history() {
+        let temp = TempDir::new().unwrap();
+        let commands_dir = temp.path().join(".commands");
+        fs::create_dir(&commands_dir).unwrap();
+
+        create_executable(&commands_dir.join("test.sh"), "#!/bin/bash\nexit 0\n").unwrap();
+
+        let args = vec!["test".to_string()];
+        run_with_context(&args, &commands_dir).unwrap();
+
+        let history = fs::read_to_string(commands_dir.join(".history.jsonl")).unwrap();
+        assert!(history.contains("\"command\":\"test\""));
+        assert!(commands_dir.join(".gitignore").exists());
+    }
+
+    #[test]
+    fn test_observe_meta_command_records_external() {
+        let temp = TempDir::new().unwrap();
+        let commands_dir = temp.path().join(".commands");
+        fs::create_dir(&commands_dir).unwrap();
+
+        let args = vec![
+            "--observe".to_string(),
+            "git".to_string(),
+            "status".to_string(),
+        ];
+        let result = run_with_context(&args, &commands_dir).unwrap();
+        assert_eq!(result, 0);
+
+        let history = fs::read_to_string(commands_dir.join(".history.jsonl")).unwrap();
+        assert!(history.contains("git status"));
+        assert!(history.contains("\"kind\":\"external\""));
+    }
+
+    #[test]
+    fn test_suggest_meta_command() {
+        let temp = TempDir::new().unwrap();
+        let commands_dir = temp.path().join(".commands");
+        fs::create_dir(&commands_dir).unwrap();
+
+        create_executable(&commands_dir.join("test.sh"), "#!/bin/bash\nexit 0\n").unwrap();
+
+        let args = vec!["--suggest".to_string()];
+        let result = run_with_context(&args, &commands_dir).unwrap();
+        assert_eq!(result, 0);
     }
 
     #[test]

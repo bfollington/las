@@ -5,6 +5,7 @@ mod completions;
 mod discovery;
 mod frontmatter;
 mod help;
+mod history;
 mod hooks;
 mod json;
 mod new;
