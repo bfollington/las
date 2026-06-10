@@ -274,8 +274,13 @@ template: |           # Custom template for --new
 
 ## Install
 
+Grab a prebuilt binary from [Releases](https://github.com/bfollington/las/releases)
+(macOS arm64/x86_64, Linux x86_64/aarch64 musl) and drop it on your PATH, or build
+from source:
+
 ```bash
 cargo install --path .
 ```
 
-Requires Rust 1.85+ (edition 2024).
+Building requires Rust 1.85+ (edition 2024). las is unix-only by design — commands
+are shell scripts executed via `/bin/bash`.
