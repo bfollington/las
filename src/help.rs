@@ -25,6 +25,10 @@ pub fn format_top_level_help(tree: &CommandTree, commands_dir: &Path, name: &str
     output.push_str("  --edit <cmd>        Open command in $EDITOR\n");
     output.push_str("  --new <cmd>         Create a new command\n");
     output.push_str("  --skill             Print agent skill document\n");
+    output.push_str(
+        "  --sync              Write skill document to .claude/skills/ for agent auto-discovery\n",
+    );
+    output.push_str("  --json              Print all command metadata as JSON\n");
     output.push_str("  --completions <sh>  Generate shell completions\n");
     output.push_str("  --config            Show configuration\n");
     output.push('\n');

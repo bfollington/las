@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct ArgDef {
     pub name: String,
     pub description: Option<String>,
@@ -12,7 +12,7 @@ pub struct ArgDef {
     pub choices: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct FlagDef {
     pub name: String,
     pub description: Option<String>,

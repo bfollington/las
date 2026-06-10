@@ -301,6 +301,21 @@ fn handle_meta_command(flag: &str, remaining: &[String], commands_dir: &Path) ->
             print!("{}", skill_doc);
             Ok(0)
         }
+        "--sync" => {
+            let tree = discover(commands_dir)?;
+            let skill_path = crate::sync::sync_skill(&tree, commands_dir, name)?;
+            println!("Wrote {}", skill_path.display());
+            println!(
+                "Agents will now discover `{}` automatically. Re-run after adding or changing commands.",
+                name
+            );
+            Ok(0)
+        }
+        "--json" => {
+            let tree = discover(commands_dir)?;
+            println!("{}", crate::json::generate_json(&tree, commands_dir, name));
+            Ok(0)
+        }
         "--completions" => {
             if remaining.is_empty() {
                 eprintln!("las: --completions requires a shell name (bash, zsh, fish)");
@@ -778,6 +793,40 @@ echo "hello $ARG_NAME"
         let tree = discover(&commands_dir).unwrap();
         let count = count_commands(&tree);
         assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_sync_meta_command_writes_skill() {
+        let temp = TempDir::new().unwrap();
+        let commands_dir = temp.path().join(".commands");
+        fs::create_dir(&commands_dir).unwrap();
+
+        create_executable(&commands_dir.join("test.sh"), "#!/bin/bash\necho test\n").unwrap();
+
+        let args = vec!["--sync".to_string()];
+        let result = run_with_context(&args, &commands_dir).unwrap();
+        assert_eq!(result, 0);
+
+        let skill_path = temp
+            .path()
+            .join(".claude")
+            .join("skills")
+            .join("las")
+            .join("SKILL.md");
+        assert!(skill_path.exists());
+    }
+
+    #[test]
+    fn test_json_meta_command() {
+        let temp = TempDir::new().unwrap();
+        let commands_dir = temp.path().join(".commands");
+        fs::create_dir(&commands_dir).unwrap();
+
+        create_executable(&commands_dir.join("test.sh"), "#!/bin/bash\necho test\n").unwrap();
+
+        let args = vec!["--json".to_string()];
+        let result = run_with_context(&args, &commands_dir).unwrap();
+        assert_eq!(result, 0);
     }
 
     #[test]
