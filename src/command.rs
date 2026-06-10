@@ -37,6 +37,8 @@ pub struct CommandDef {
     pub script_path: PathBuf,
     pub args: Vec<ArgDef>,
     pub flags: Vec<FlagDef>,
+    /// Declared in frontmatter but not consumed by the runner yet
+    #[allow(dead_code)]
     pub stdin: Option<String>,
 }
 
