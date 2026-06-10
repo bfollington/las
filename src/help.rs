@@ -18,6 +18,19 @@ pub fn format_top_level_help(tree: &CommandTree, commands_dir: &Path, name: &str
     }
 
     // META section
+    format_meta_section(&mut output);
+
+    // Footer with helpful hints
+    output.push_str("This CLI is extensible. Commands live in:\n");
+    output.push_str(&format!("  {}\n\n", commands_dir.display()));
+    output.push_str(&format!("Create new commands: {} --new <name>\n", name));
+    output.push_str(&format!("Agent skill document: {} --skill\n", name));
+
+    output
+}
+
+/// Format the META flags list (shared by in-project and no-project help)
+fn format_meta_section(output: &mut String) {
     output.push_str("META\n");
     output.push_str("  --help              Show this help\n");
     output.push_str("  --list              List all commands (tree)\n");
@@ -38,12 +51,22 @@ pub fn format_top_level_help(tree: &CommandTree, commands_dir: &Path, name: &str
     output.push_str("  --completions <sh>  Generate shell completions\n");
     output.push_str("  --config            Show configuration\n");
     output.push('\n');
+}
 
-    // Footer with helpful hints
-    output.push_str("This CLI is extensible. Commands live in:\n");
-    output.push_str(&format!("  {}\n\n", commands_dir.display()));
-    output.push_str(&format!("Create new commands: {} --new <name>\n", name));
-    output.push_str(&format!("Agent skill document: {} --skill\n", name));
+/// Format top-level help when no .commands directory was found (outside a project)
+pub fn format_top_level_help_no_project(name: &str) -> String {
+    let mut output = String::new();
+
+    output.push_str(&format!("{} — project commands\n\n", name));
+
+    // META section only — there are no commands to list without a project
+    format_meta_section(&mut output);
+
+    // Footer explaining how to bootstrap a project
+    output.push_str("No .commands directory found (searched from the current directory upward).\n");
+    output.push_str("This CLI is extensible. Bootstrap it by creating a commands directory:\n");
+    output.push_str("  mkdir .commands\n\n");
+    output.push_str(&format!("Then create commands: {} --new <name>\n", name));
 
     output
 }
@@ -51,6 +74,11 @@ pub fn format_top_level_help(tree: &CommandTree, commands_dir: &Path, name: &str
 /// Print top-level help
 pub fn print_top_level_help(tree: &CommandTree, commands_dir: &Path, name: &str) {
     print!("{}", format_top_level_help(tree, commands_dir, name));
+}
+
+/// Print top-level help when no .commands directory was found
+pub fn print_top_level_help_no_project(name: &str) {
+    print!("{}", format_top_level_help_no_project(name));
 }
 
 /// Recursively format command list with groups and their children
@@ -365,6 +393,24 @@ mod tests {
         assert!(output.contains("Database commands"));
         assert!(output.contains("migrate"));
         assert!(output.contains("Run migrations"));
+    }
+
+    #[test]
+    fn test_format_top_level_help_no_project() {
+        let output = format_top_level_help_no_project("las");
+
+        // Same META flags list as in-project help, but no COMMANDS section
+        assert!(output.contains("las — project commands"));
+        assert!(output.contains("META"));
+        assert!(output.contains("--help"));
+        assert!(output.contains("--observe"));
+        assert!(!output.contains("COMMANDS"));
+
+        // Footer explains what happened and how to bootstrap
+        assert!(output.contains("No .commands directory found"));
+        assert!(output.contains("searched from the current directory upward"));
+        assert!(output.contains("mkdir .commands"));
+        assert!(output.contains("las --new <name>"));
     }
 
     #[test]
