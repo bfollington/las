@@ -18,6 +18,7 @@ pub fn create_command(
     commands_dir: &Path,
     cmd_path: &str,
     template: Option<&str>,
+    cli_name: &str,
 ) -> Result<PathBuf> {
     // Parse the command path
     let segments: Vec<&str> = cmd_path.split('/').collect();
@@ -45,43 +46,44 @@ pub fn create_command(
 
     // Create intermediate directories if needed
     if let Some(parent) = target_path.parent() {
-        fs::create_dir_all(parent)
-            .context("failed to create intermediate directories")?;
+        fs::create_dir_all(parent).context("failed to create intermediate directories")?;
     }
 
     // Get the template content
+    let invocation = format!("{} {}", cli_name, segments.join(" "));
     let content = match template {
         Some(custom_template) => custom_template.to_string(),
-        None => default_template(cmd_name),
+        None => default_template(cmd_name, &invocation),
     };
 
     // Write the template to the file
-    fs::write(&target_path, content)
-        .context("failed to write command file")?;
+    fs::write(&target_path, content).context("failed to write command file")?;
 
     // Make it executable (Unix only)
     #[cfg(unix)]
     {
         let mut perms = fs::metadata(&target_path)?.permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&target_path, perms)
-            .context("failed to set executable permissions")?;
+        fs::set_permissions(&target_path, perms).context("failed to set executable permissions")?;
     }
 
     Ok(target_path)
 }
 
 /// Generate the default template for a new command
-fn default_template(cmd_name: &str) -> String {
+fn default_template(cmd_name: &str, invocation: &str) -> String {
     format!(
         r#"#!/bin/bash
 #---
-# description: TODO describe this command
+# description: TODO one-line description (readers pick commands by this line)
+# usage: |
+#   {invocation}   # TODO copy-pasteable example; shown in --help and --skill
+# on-failure: TODO hint printed when this command exits nonzero (how to recover)
 #---
+set -euo pipefail
 
-echo "TODO: implement {}"
-"#,
-        cmd_name
+echo "TODO: implement {cmd_name}"
+"#
     )
 }
 
@@ -96,7 +98,7 @@ mod tests {
         let commands_dir = temp.path().join(".commands");
         fs::create_dir(&commands_dir).unwrap();
 
-        let result = create_command(&commands_dir, "test", None).unwrap();
+        let result = create_command(&commands_dir, "test", None, "las").unwrap();
 
         // Check file exists
         assert!(result.exists());
@@ -113,7 +115,11 @@ mod tests {
         // Check content
         let content = fs::read_to_string(&result).unwrap();
         assert!(content.contains("#!/bin/bash"));
-        assert!(content.contains("description: TODO describe this command"));
+        assert!(content.contains("description: TODO"));
+        assert!(content.contains("usage: |"));
+        assert!(content.contains("las test "));
+        assert!(content.contains("on-failure: TODO"));
+        assert!(content.contains("set -euo pipefail"));
         assert!(content.contains("echo \"TODO: implement test\""));
     }
 
@@ -123,7 +129,7 @@ mod tests {
         let commands_dir = temp.path().join(".commands");
         fs::create_dir(&commands_dir).unwrap();
 
-        let result = create_command(&commands_dir, "db/reset", None).unwrap();
+        let result = create_command(&commands_dir, "db/reset", None, "las").unwrap();
 
         // Check file exists in nested directory
         assert!(result.exists());
@@ -148,7 +154,7 @@ mod tests {
 echo "custom"
 "#;
 
-        let result = create_command(&commands_dir, "custom", Some(custom_template)).unwrap();
+        let result = create_command(&commands_dir, "custom", Some(custom_template), "las").unwrap();
 
         // Check file exists
         assert!(result.exists());
@@ -169,7 +175,7 @@ echo "custom"
         fs::write(&existing, "existing content").unwrap();
 
         // Try to create it again
-        let result = create_command(&commands_dir, "existing", None);
+        let result = create_command(&commands_dir, "existing", None, "las");
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already exists"));
@@ -185,7 +191,7 @@ echo "custom"
         let commands_dir = temp.path().join(".commands");
         fs::create_dir(&commands_dir).unwrap();
 
-        let result = create_command(&commands_dir, "deploy/production", None).unwrap();
+        let result = create_command(&commands_dir, "deploy/production", None, "las").unwrap();
 
         let content = fs::read_to_string(&result).unwrap();
         // The command name in the TODO should be the last segment

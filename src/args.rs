@@ -184,8 +184,16 @@ pub fn parse_args(cmd: &CommandDef, raw: &[String]) -> Result<ParsedArgs, ArgsEr
     // Map positional arguments to declared arg names
     for (idx, arg_def) in cmd.args.iter().enumerate() {
         let env_name = to_env_name("ARG", &arg_def.name);
+        let is_last = idx + 1 == cmd.args.len();
 
-        if idx < positional.len() {
+        if arg_def.variadic && is_last && idx < positional.len() {
+            // Variadic last arg collects all remaining positional words
+            let rest = &positional[idx..];
+            for value in rest {
+                validate_choice(&arg_def.name, value, &arg_def.choices)?;
+            }
+            env_args.insert(env_name, rest.join(" "));
+        } else if idx < positional.len() {
             // Use provided positional value
             let value = &positional[idx];
             validate_choice(&arg_def.name, value, &arg_def.choices)?;
@@ -204,9 +212,10 @@ pub fn parse_args(cmd: &CommandDef, raw: &[String]) -> Result<ParsedArgs, ArgsEr
         if flag.value.is_some() {
             let env_name = to_env_name("FLAG", &flag.name);
             if !env_flags.contains_key(&env_name)
-                && let Some(default) = &flag.default {
-                    env_flags.insert(env_name, default.clone());
-                }
+                && let Some(default) = &flag.default
+            {
+                env_flags.insert(env_name, default.clone());
+            }
         }
     }
 
@@ -218,15 +227,20 @@ pub fn parse_args(cmd: &CommandDef, raw: &[String]) -> Result<ParsedArgs, ArgsEr
 }
 
 /// Validate that a value is in the allowed choices (if choices are defined)
-fn validate_choice(name: &str, value: &str, choices: &Option<Vec<String>>) -> Result<(), ArgsError> {
+fn validate_choice(
+    name: &str,
+    value: &str,
+    choices: &Option<Vec<String>>,
+) -> Result<(), ArgsError> {
     if let Some(valid_choices) = choices
-        && !valid_choices.contains(&value.to_string()) {
-            return Err(ArgsError::InvalidChoice {
-                name: name.to_string(),
-                value: value.to_string(),
-                choices: valid_choices.clone(),
-            });
-        }
+        && !valid_choices.contains(&value.to_string())
+    {
+        return Err(ArgsError::InvalidChoice {
+            name: name.to_string(),
+            value: value.to_string(),
+            choices: valid_choices.clone(),
+        });
+    }
     Ok(())
 }
 
@@ -246,6 +260,7 @@ mod tests {
                     name: "env".into(),
                     description: None,
                     required: true,
+                    variadic: false,
                     default: None,
                     choices: Some(vec!["dev".into(), "prod".into()]),
                 },
@@ -253,6 +268,7 @@ mod tests {
                     name: "region".into(),
                     description: None,
                     required: false,
+                    variadic: false,
                     default: Some("us-west".into()),
                     choices: None,
                 },
@@ -291,7 +307,7 @@ mod tests {
                     choices: Some(vec!["json".into(), "yaml".into()]),
                 },
             ],
-            stdin: None,
+            ..Default::default()
         }
     }
 
@@ -344,7 +360,11 @@ mod tests {
     #[test]
     fn test_value_flag_long_space() {
         let cmd = make_test_command();
-        let raw = vec!["--output".to_string(), "file.txt".to_string(), "prod".to_string()];
+        let raw = vec![
+            "--output".to_string(),
+            "file.txt".to_string(),
+            "prod".to_string(),
+        ];
         let parsed = parse_args(&cmd, &raw).unwrap();
 
         assert_eq!(
@@ -401,7 +421,11 @@ mod tests {
     #[test]
     fn test_invalid_flag_choice() {
         let cmd = make_test_command();
-        let raw = vec!["--format".to_string(), "xml".to_string(), "prod".to_string()];
+        let raw = vec![
+            "--format".to_string(),
+            "xml".to_string(),
+            "prod".to_string(),
+        ];
         let result = parse_args(&cmd, &raw);
 
         assert!(matches!(result, Err(ArgsError::InvalidChoice { .. })));
@@ -461,7 +485,12 @@ mod tests {
     #[test]
     fn test_extra_positional_args() {
         let cmd = make_test_command();
-        let raw = vec!["prod".to_string(), "us-east".to_string(), "extra1".to_string(), "extra2".to_string()];
+        let raw = vec![
+            "prod".to_string(),
+            "us-east".to_string(),
+            "extra1".to_string(),
+            "extra2".to_string(),
+        ];
         let parsed = parse_args(&cmd, &raw).unwrap();
 
         // All positional args should be preserved
@@ -473,7 +502,10 @@ mod tests {
 
         // First two should map to env vars
         assert_eq!(parsed.env_args.get("ARG_ENV"), Some(&"prod".to_string()));
-        assert_eq!(parsed.env_args.get("ARG_REGION"), Some(&"us-east".to_string()));
+        assert_eq!(
+            parsed.env_args.get("ARG_REGION"),
+            Some(&"us-east".to_string())
+        );
     }
 
     #[test]
@@ -493,6 +525,79 @@ mod tests {
             parsed.env_flags.get("FLAG_VERBOSE"),
             Some(&"false".to_string())
         );
+    }
+
+    fn make_variadic_command(required: bool) -> CommandDef {
+        CommandDef {
+            name: "gconsole".into(),
+            args: vec![ArgDef {
+                name: "command".into(),
+                required,
+                variadic: true,
+                ..Default::default()
+            }],
+            flags: vec![FlagDef {
+                name: "settle".into(),
+                value: Some("seconds".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_variadic_collects_remaining_words() {
+        let cmd = make_variadic_command(true);
+        let raw = vec![
+            "switch_biome".to_string(),
+            "ice".to_string(),
+            "--settle".to_string(),
+            "0.3".to_string(),
+        ];
+        let parsed = parse_args(&cmd, &raw).unwrap();
+
+        assert_eq!(
+            parsed.env_args.get("ARG_COMMAND"),
+            Some(&"switch_biome ice".to_string())
+        );
+        assert_eq!(
+            parsed.env_flags.get("FLAG_SETTLE"),
+            Some(&"0.3".to_string())
+        );
+        // $1, $2 still see the individual words
+        assert_eq!(parsed.positional, vec!["switch_biome", "ice"]);
+    }
+
+    #[test]
+    fn test_variadic_required_missing() {
+        let cmd = make_variadic_command(true);
+        let result = parse_args(&cmd, &[]);
+        assert!(matches!(result, Err(ArgsError::MissingRequired(_))));
+    }
+
+    #[test]
+    fn test_variadic_optional_missing_is_ok() {
+        let cmd = make_variadic_command(false);
+        let parsed = parse_args(&cmd, &[]).unwrap();
+        assert!(!parsed.env_args.contains_key("ARG_COMMAND"));
+    }
+
+    #[test]
+    fn test_variadic_validates_each_word_against_choices() {
+        let cmd = CommandDef {
+            name: "pick".into(),
+            args: vec![ArgDef {
+                name: "items".into(),
+                required: true,
+                variadic: true,
+                choices: Some(vec!["a".into(), "b".into()]),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(parse_args(&cmd, &["a".to_string(), "b".to_string()]).is_ok());
+        let result = parse_args(&cmd, &["a".to_string(), "c".to_string()]);
+        assert!(matches!(result, Err(ArgsError::InvalidChoice { .. })));
     }
 
     #[test]

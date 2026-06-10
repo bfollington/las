@@ -8,6 +8,10 @@ use std::path::PathBuf;
 #[derive(Debug, Deserialize, Default)]
 pub struct RawFrontmatter {
     pub description: Option<String>,
+    pub usage: Option<String>,
+    #[serde(rename = "on-failure", alias = "on_failure")]
+    pub on_failure: Option<String>,
+    pub artifacts: Option<Vec<String>>,
     pub args: Option<BTreeMap<String, RawArg>>,
     pub flags: Option<BTreeMap<String, RawFlag>>,
     pub stdin: Option<String>,
@@ -18,6 +22,8 @@ pub struct RawArg {
     pub description: Option<String>,
     #[serde(default)]
     pub required: bool,
+    #[serde(default)]
+    pub variadic: bool,
     pub default: Option<String>,
     pub choices: Option<Vec<String>>,
 }
@@ -78,7 +84,7 @@ pub fn command_from_script(
 ) -> Result<CommandDef, String> {
     let frontmatter = parse_frontmatter(content)?;
 
-    let (description, args, flags, stdin) = match frontmatter {
+    let (description, usage, on_failure, artifacts, args, flags, stdin) = match frontmatter {
         Some(fm) => {
             let args: Vec<ArgDef> = fm
                 .args
@@ -88,6 +94,7 @@ pub fn command_from_script(
                     name,
                     description: raw.description,
                     required: raw.required,
+                    variadic: raw.variadic,
                     default: raw.default,
                     choices: raw.choices,
                 })
@@ -107,14 +114,25 @@ pub fn command_from_script(
                 })
                 .collect();
 
-            (fm.description, args, flags, fm.stdin)
+            (
+                fm.description,
+                fm.usage,
+                fm.on_failure,
+                fm.artifacts.unwrap_or_default(),
+                args,
+                flags,
+                fm.stdin,
+            )
         }
-        None => (None, vec![], vec![], None),
+        None => (None, None, None, vec![], vec![], vec![], None),
     };
 
     Ok(CommandDef {
         name: name.to_string(),
         description,
+        usage,
+        on_failure,
+        artifacts,
         script_path,
         args,
         flags,
@@ -231,6 +249,52 @@ echo "hello $ARG_NAME"
         let fm = parse_frontmatter(content).unwrap().unwrap();
         assert_eq!(fm.description.as_deref(), Some("Test"));
         assert!(fm.args.is_some());
+    }
+
+    #[test]
+    fn parse_usage_on_failure_artifacts_variadic() {
+        let content = r#"#!/bin/bash
+#---
+# description: Run a console command
+# usage: |
+#   las gconsole switch_biome ice    # 2.5s settle
+#   las gconsole give_skin lovers --settle 0.3
+# on-failure: Is the game running? Try `las shot` first.
+# artifacts:
+#   - /tmp/godot_screenshot.png
+# args:
+#   command:
+#     description: Console command and its arguments
+#     required: true
+#     variadic: true
+#---
+echo hi
+"#;
+        let cmd = command_from_script("gconsole", PathBuf::from("gconsole.sh"), content).unwrap();
+        assert!(cmd.usage.as_deref().unwrap().contains("switch_biome ice"));
+        assert_eq!(
+            cmd.on_failure.as_deref(),
+            Some("Is the game running? Try `las shot` first.")
+        );
+        assert_eq!(cmd.artifacts, vec!["/tmp/godot_screenshot.png"]);
+        assert!(cmd.args[0].variadic);
+        assert!(cmd.args[0].required);
+    }
+
+    #[test]
+    fn on_failure_accepts_underscore_alias() {
+        let content = "#!/bin/bash\n#---\n# on_failure: try again\n#---\necho hi\n";
+        let fm = parse_frontmatter(content).unwrap().unwrap();
+        assert_eq!(fm.on_failure.as_deref(), Some("try again"));
+    }
+
+    #[test]
+    fn new_fields_default_to_empty() {
+        let content = "#!/bin/bash\n#---\n# description: Plain\n#---\necho hi\n";
+        let cmd = command_from_script("plain", PathBuf::from("plain.sh"), content).unwrap();
+        assert!(cmd.usage.is_none());
+        assert!(cmd.on_failure.is_none());
+        assert!(cmd.artifacts.is_empty());
     }
 
     #[test]

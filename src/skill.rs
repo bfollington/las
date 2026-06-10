@@ -35,10 +35,19 @@ pub fn generate_skill(tree: &CommandTree, commands_dir: &Path, name: &str) -> St
     output.push_str("#!/bin/bash\n");
     output.push_str("#---\n");
     output.push_str("# description: What this command does\n");
+    output.push_str("# usage: |\n");
+    output
+        .push_str("#   las cmd foo --bar    # copy-pasteable examples; shown in --help and here\n");
+    output.push_str("# on-failure: Hint printed when the command exits nonzero (how to recover)\n");
+    output.push_str("# artifacts:\n");
+    output.push_str(
+        "#   - /tmp/output.png    # files the command produces; pointers printed on success\n",
+    );
     output.push_str("# args:\n");
     output.push_str("#   arg_name:\n");
     output.push_str("#     description: What this argument is\n");
     output.push_str("#     required: true\n");
+    output.push_str("#     variadic: true       # last arg only: collects all remaining words\n");
     output.push_str("#     default: value\n");
     output.push_str("#     choices: [a, b, c]\n");
     output.push_str("# flags:\n");
@@ -69,7 +78,13 @@ pub fn generate_skill(tree: &CommandTree, commands_dir: &Path, name: &str) -> St
     output.push_str("- Prefer small, composable commands\n");
     output.push_str("- Use descriptive names that form a natural vocabulary\n");
     output.push_str("- Group related commands in subdirectories\n");
-    output.push_str("- Always include a description in frontmatter\n");
+    output.push_str(
+        "- Always include a description and a copy-pasteable `usage:` example in frontmatter\n",
+    );
+    output.push_str("- Add `on-failure:` hints so failures explain how to recover\n");
+    output.push_str(
+        "- Declare `artifacts:` for files a command produces, so callers know what to read next\n",
+    );
     output.push_str("- Use `set -euo pipefail` for robust scripts\n");
 
     output
@@ -90,6 +105,13 @@ fn format_commands(tree: &CommandTree, path: &str, name: &str, output: &mut Stri
                 output.push_str("No description\n\n");
             }
 
+            // Usage examples / caveats
+            if let Some(usage) = &cmd.usage {
+                output.push_str("**Usage:**\n```\n");
+                output.push_str(usage.trim_end());
+                output.push_str("\n```\n\n");
+            }
+
             // Arguments
             if !cmd.args.is_empty() {
                 output.push_str("**Arguments:**\n");
@@ -104,6 +126,15 @@ fn format_commands(tree: &CommandTree, path: &str, name: &str, output: &mut Stri
                 output.push_str("**Flags:**\n");
                 for flag in &cmd.flags {
                     format_flag(flag, output);
+                }
+                output.push('\n');
+            }
+
+            // Artifacts
+            if !cmd.artifacts.is_empty() {
+                output.push_str("**Artifacts** (read these after a successful run):\n");
+                for artifact in &cmd.artifacts {
+                    output.push_str(&format!("- `{}`\n", artifact));
                 }
                 output.push('\n');
             }
@@ -207,6 +238,7 @@ mod tests {
                     name: "env".into(),
                     description: Some("Target environment".into()),
                     required: true,
+                    variadic: false,
                     default: None,
                     choices: Some(vec!["staging".into(), "production".into()]),
                 }],
@@ -218,7 +250,7 @@ mod tests {
                     default: None,
                     choices: None,
                 }],
-                stdin: None,
+                ..Default::default()
             }),
         );
         tree
@@ -298,7 +330,7 @@ mod tests {
                 script_path: PathBuf::from(".commands/db/migrate.sh"),
                 args: vec![],
                 flags: vec![],
-                stdin: None,
+                ..Default::default()
             }),
         );
         tree.insert("db", db_group);
@@ -320,7 +352,7 @@ mod tests {
                 script_path: PathBuf::from(".commands/test.sh"),
                 args: vec![],
                 flags: vec![],
-                stdin: None,
+                ..Default::default()
             }),
         );
 
@@ -347,7 +379,7 @@ mod tests {
                     default: Some("dist/output".into()),
                     choices: None,
                 }],
-                stdin: None,
+                ..Default::default()
             }),
         );
 
@@ -357,6 +389,39 @@ mod tests {
         assert!(skill.contains("Output file"));
         assert!(skill.contains("takes value: file"));
         assert!(skill.contains("default: dist/output"));
+    }
+
+    #[test]
+    fn skill_doc_contains_usage_and_artifacts() {
+        let mut tree = CommandTree::new_group("root");
+        tree.insert(
+            "shot",
+            CommandTree::Leaf(CommandDef {
+                name: "shot".into(),
+                description: Some("Capture a screenshot".into()),
+                usage: Some("las shot   # then Read the PNG\n".into()),
+                artifacts: vec!["/tmp/godot_screenshot.png".into()],
+                ..Default::default()
+            }),
+        );
+
+        let skill = generate_skill(&tree, Path::new("/test/.commands"), "las");
+
+        assert!(skill.contains("**Usage:**"));
+        assert!(skill.contains("las shot   # then Read the PNG"));
+        assert!(skill.contains("**Artifacts**"));
+        assert!(skill.contains("/tmp/godot_screenshot.png"));
+    }
+
+    #[test]
+    fn skill_doc_documents_new_frontmatter_fields() {
+        let tree = make_simple_tree();
+        let skill = generate_skill(&tree, Path::new("/test/.commands"), "las");
+
+        assert!(skill.contains("usage: |"));
+        assert!(skill.contains("on-failure:"));
+        assert!(skill.contains("artifacts:"));
+        assert!(skill.contains("variadic: true"));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use crate::args::{parse_args, ArgsError};
+use crate::args::{ArgsError, parse_args};
 use crate::command::CommandTree;
 use crate::discovery::{discover, find_commands_dir};
 use crate::help;
@@ -26,8 +26,9 @@ pub fn run() -> Result<i32> {
 /// Run with explicit args (for testing)
 pub fn run_with_args(args: &[String]) -> Result<i32> {
     // Find the .commands directory
-    let commands_dir = find_commands_dir(&env::current_dir()?)
-        .context("No .commands directory found. Run this from a project with a .commands/ directory.")?;
+    let commands_dir = find_commands_dir(&env::current_dir()?).context(
+        "No .commands directory found. Run this from a project with a .commands/ directory.",
+    )?;
 
     run_with_context(args, &commands_dir)
 }
@@ -84,6 +85,22 @@ pub fn run_with_context(args: &[String], commands_dir: &Path) -> Result<i32> {
     // If we didn't consume any args, command not found
     if consumed == 0 {
         eprintln!("las: command not found: {}", first_arg);
+
+        let suggestions = suggest_similar(&tree, first_arg);
+        if !suggestions.is_empty() {
+            eprintln!();
+            eprintln!("Did you mean?");
+            for suggestion in suggestions {
+                eprintln!("  {}", suggestion);
+            }
+        }
+
+        let available = help::format_available_commands(&tree);
+        if !available.is_empty() {
+            eprintln!();
+            eprintln!("Available commands:");
+            eprint!("{}", available);
+        }
         return Ok(127);
     }
 
@@ -92,15 +109,32 @@ pub fn run_with_context(args: &[String], commands_dir: &Path) -> Result<i32> {
 
     // Check what we resolved to
     match current_tree {
-        CommandTree::Group { name: _group_name, description, children, order } => {
+        CommandTree::Group {
+            name: _group_name,
+            description,
+            children,
+            order,
+        } => {
             // If remaining args contain --help, show group help
             if remaining.iter().any(|a| a == "--help") {
-                help::print_group_help(name, &cmd_path, description.as_deref(), children, order.as_deref());
+                help::print_group_help(
+                    name,
+                    &cmd_path,
+                    description.as_deref(),
+                    children,
+                    order.as_deref(),
+                );
                 return Ok(0);
             }
 
             // Otherwise, show group help (user didn't specify a subcommand)
-            help::print_group_help(name, &cmd_path, description.as_deref(), children, order.as_deref());
+            help::print_group_help(
+                name,
+                &cmd_path,
+                description.as_deref(),
+                children,
+                order.as_deref(),
+            );
             Ok(0)
         }
         CommandTree::Leaf(cmd) => {
@@ -114,7 +148,10 @@ pub fn run_with_context(args: &[String], commands_dir: &Path) -> Result<i32> {
             match parse_args(cmd, &remaining) {
                 Ok(parsed) => {
                     // Collect hooks
-                    let rel_path = cmd.script_path.strip_prefix(commands_dir).unwrap_or(&cmd.script_path);
+                    let rel_path = cmd
+                        .script_path
+                        .strip_prefix(commands_dir)
+                        .unwrap_or(&cmd.script_path);
                     let hook_files = hooks::collect_hooks(commands_dir, rel_path);
 
                     // Run before hooks
@@ -127,6 +164,15 @@ pub fn run_with_context(args: &[String], commands_dir: &Path) -> Result<i32> {
 
                     // Run after hooks
                     hooks::run_after_hooks(&hook_files, &parsed, shell, exit_code)?;
+
+                    if exit_code == 0 {
+                        // Point the caller at declared artifacts
+                        for artifact in &cmd.artifacts {
+                            println!("-> {}", artifact);
+                        }
+                    } else if let Some(hint) = &cmd.on_failure {
+                        eprintln!("hint: {}", hint);
+                    }
 
                     Ok(exit_code)
                 }
@@ -147,11 +193,9 @@ fn load_config(commands_dir: &Path) -> Result<Config> {
         return Ok(Config::default());
     }
 
-    let content = fs::read_to_string(&config_path)
-        .context("failed to read _config.yml")?;
+    let content = fs::read_to_string(&config_path).context("failed to read _config.yml")?;
 
-    let config: Config = serde_yaml::from_str(&content)
-        .context("failed to parse _config.yml")?;
+    let config: Config = serde_yaml::from_str(&content).context("failed to parse _config.yml")?;
 
     Ok(config)
 }
@@ -231,10 +275,16 @@ fn handle_meta_command(flag: &str, remaining: &[String], commands_dir: &Path) ->
             let cmd_path = &remaining[0];
             let config = load_config(commands_dir)?;
 
-            match crate::new::create_command(commands_dir, cmd_path, config.template.as_deref()) {
+            match crate::new::create_command(
+                commands_dir,
+                cmd_path,
+                config.template.as_deref(),
+                name,
+            ) {
                 Ok(created_path) => {
                     // Calculate the relative path from commands_dir
-                    let relative = created_path.strip_prefix(commands_dir)
+                    let relative = created_path
+                        .strip_prefix(commands_dir)
                         .unwrap_or(&created_path);
                     println!("Created {} (chmod +x)", relative.display());
                     Ok(0)
@@ -307,6 +357,65 @@ fn print_tree(tree: &CommandTree, indent: usize) {
     }
 }
 
+/// Collect every invocable name in the tree: top-level names plus nested "group sub" paths
+fn collect_command_paths(tree: &CommandTree, prefix: &str, out: &mut Vec<String>) {
+    if let Some(children) = tree.children() {
+        for (child_name, child) in children {
+            let path = if prefix.is_empty() {
+                child_name.clone()
+            } else {
+                format!("{} {}", prefix, child_name)
+            };
+            out.push(path.clone());
+            collect_command_paths(child, &path, out);
+        }
+    }
+}
+
+/// Suggest command names similar to the given (unknown) input
+fn suggest_similar(tree: &CommandTree, input: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    collect_command_paths(tree, "", &mut paths);
+
+    let mut scored: Vec<(usize, String)> = paths
+        .into_iter()
+        .filter_map(|path| {
+            // Compare against the last segment so "db migrate" matches input "migrate"
+            let last = path.rsplit(' ').next().unwrap_or(&path);
+            let distance = edit_distance(input, last).min(edit_distance(input, &path));
+            // Allow more slack for longer names, and catch prefix typos
+            let threshold = (input.len().max(3) / 3).max(2);
+            if distance <= threshold || last.starts_with(input) {
+                Some((distance, path))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    scored.sort();
+    scored.into_iter().take(3).map(|(_, path)| path).collect()
+}
+
+/// Levenshtein edit distance
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut current = vec![0; b.len() + 1];
+
+    for (i, ca) in a.iter().enumerate() {
+        current[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            current[j + 1] = (prev[j] + cost).min(prev[j + 1] + 1).min(current[j] + 1);
+        }
+        std::mem::swap(&mut prev, &mut current);
+    }
+
+    prev[b.len()]
+}
+
 /// Resolve a command path through the tree
 fn resolve_command<'a>(tree: &'a CommandTree, path: &[String]) -> Option<&'a CommandTree> {
     let mut current = tree;
@@ -325,9 +434,7 @@ fn resolve_command<'a>(tree: &'a CommandTree, path: &[String]) -> Option<&'a Com
 fn count_commands(tree: &CommandTree) -> usize {
     match tree {
         CommandTree::Leaf(_) => 1,
-        CommandTree::Group { children, .. } => {
-            children.values().map(count_commands).sum()
-        }
+        CommandTree::Group { children, .. } => children.values().map(count_commands).sum(),
     }
 }
 
@@ -364,10 +471,7 @@ mod tests {
         let commands_dir = temp.path().join(".commands");
         fs::create_dir(&commands_dir).unwrap();
 
-        create_executable(
-            &commands_dir.join("test.sh"),
-            "#!/bin/bash\necho test\n",
-        ).unwrap();
+        create_executable(&commands_dir.join("test.sh"), "#!/bin/bash\necho test\n").unwrap();
 
         let args = vec![];
         let result = run_with_context(&args, &commands_dir).unwrap();
@@ -414,10 +518,7 @@ echo "hello $ARG_NAME"
         let commands_dir = temp.path().join(".commands");
         fs::create_dir(&commands_dir).unwrap();
 
-        create_executable(
-            &commands_dir.join("test.sh"),
-            "#!/bin/bash\nexit 0\n",
-        ).unwrap();
+        create_executable(&commands_dir.join("test.sh"), "#!/bin/bash\nexit 0\n").unwrap();
 
         let args = vec!["test".to_string()];
         let result = run_with_context(&args, &commands_dir).unwrap();
@@ -433,10 +534,7 @@ echo "hello $ARG_NAME"
         let db_dir = commands_dir.join("db");
         fs::create_dir(&db_dir).unwrap();
 
-        create_executable(
-            &db_dir.join("migrate.sh"),
-            "#!/bin/bash\nexit 0\n",
-        ).unwrap();
+        create_executable(&db_dir.join("migrate.sh"), "#!/bin/bash\nexit 0\n").unwrap();
 
         let args = vec!["db".to_string(), "migrate".to_string()];
         let result = run_with_context(&args, &commands_dir).unwrap();
@@ -452,10 +550,7 @@ echo "hello $ARG_NAME"
         let db_dir = commands_dir.join("db");
         fs::create_dir(&db_dir).unwrap();
 
-        create_executable(
-            &db_dir.join("migrate.sh"),
-            "#!/bin/bash\necho migrate\n",
-        ).unwrap();
+        create_executable(&db_dir.join("migrate.sh"), "#!/bin/bash\necho migrate\n").unwrap();
 
         // Just "db" without subcommand should show group help
         let args = vec!["db".to_string()];
@@ -491,10 +586,7 @@ echo "hello $ARG_NAME"
         let commands_dir = temp.path().join(".commands");
         fs::create_dir(&commands_dir).unwrap();
 
-        create_executable(
-            &commands_dir.join("test.sh"),
-            "#!/bin/bash\necho test\n",
-        ).unwrap();
+        create_executable(&commands_dir.join("test.sh"), "#!/bin/bash\necho test\n").unwrap();
 
         let args = vec!["--help".to_string()];
         let result = run_with_context(&args, &commands_dir).unwrap();
@@ -562,7 +654,11 @@ echo "hello $ARG_NAME"
         let commands_dir = temp.path().join(".commands");
         fs::create_dir(&commands_dir).unwrap();
 
-        create_executable(&commands_dir.join("deploy.sh"), "#!/bin/bash\necho deploy\n").unwrap();
+        create_executable(
+            &commands_dir.join("deploy.sh"),
+            "#!/bin/bash\necho deploy\n",
+        )
+        .unwrap();
 
         let args = vec!["--which".to_string(), "deploy".to_string()];
         let result = run_with_context(&args, &commands_dir).unwrap();
@@ -579,7 +675,11 @@ echo "hello $ARG_NAME"
         fs::create_dir(&db_dir).unwrap();
         create_executable(&db_dir.join("migrate.sh"), "#!/bin/bash\necho migrate\n").unwrap();
 
-        let args = vec!["--which".to_string(), "db".to_string(), "migrate".to_string()];
+        let args = vec![
+            "--which".to_string(),
+            "db".to_string(),
+            "migrate".to_string(),
+        ];
         let result = run_with_context(&args, &commands_dir).unwrap();
         assert_eq!(result, 0);
     }
@@ -678,6 +778,81 @@ echo "hello $ARG_NAME"
         let tree = discover(&commands_dir).unwrap();
         let count = count_commands(&tree);
         assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_edit_distance() {
+        assert_eq!(edit_distance("gconsole", "gconsole"), 0);
+        assert_eq!(edit_distance("gconsol", "gconsole"), 1);
+        assert_eq!(edit_distance("tset", "test"), 2);
+        assert_eq!(edit_distance("", "abc"), 3);
+    }
+
+    #[test]
+    fn test_suggest_similar_finds_typo_and_nested() {
+        let temp = TempDir::new().unwrap();
+        let commands_dir = temp.path().join(".commands");
+        fs::create_dir(&commands_dir).unwrap();
+
+        create_executable(&commands_dir.join("gconsole.sh"), "#!/bin/bash\nexit 0\n").unwrap();
+        let db_dir = commands_dir.join("db");
+        fs::create_dir(&db_dir).unwrap();
+        create_executable(&db_dir.join("migrate.sh"), "#!/bin/bash\nexit 0\n").unwrap();
+
+        let tree = discover(&commands_dir).unwrap();
+
+        // Typo on a top-level command
+        let suggestions = suggest_similar(&tree, "gconsol");
+        assert_eq!(suggestions, vec!["gconsole".to_string()]);
+
+        // Last segment of a nested command matches
+        let suggestions = suggest_similar(&tree, "migrate");
+        assert_eq!(suggestions, vec!["db migrate".to_string()]);
+
+        // Nothing close
+        let suggestions = suggest_similar(&tree, "zzzzzzzzzz");
+        assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn test_command_not_found_with_suggestions_still_exits_127() {
+        let temp = TempDir::new().unwrap();
+        let commands_dir = temp.path().join(".commands");
+        fs::create_dir(&commands_dir).unwrap();
+
+        create_executable(&commands_dir.join("deploy.sh"), "#!/bin/bash\nexit 0\n").unwrap();
+
+        let args = vec!["depoy".to_string()];
+        let result = run_with_context(&args, &commands_dir).unwrap();
+        assert_eq!(result, 127);
+    }
+
+    #[test]
+    fn test_on_failure_hint_does_not_change_exit_code() {
+        let temp = TempDir::new().unwrap();
+        let commands_dir = temp.path().join(".commands");
+        fs::create_dir(&commands_dir).unwrap();
+
+        let script = "#!/bin/bash\n#---\n# description: Fails\n# on-failure: Try turning it off and on again\n#---\nexit 3\n";
+        create_executable(&commands_dir.join("fail.sh"), script).unwrap();
+
+        let args = vec!["fail".to_string()];
+        let result = run_with_context(&args, &commands_dir).unwrap();
+        assert_eq!(result, 3);
+    }
+
+    #[test]
+    fn test_artifacts_printed_on_success_path() {
+        let temp = TempDir::new().unwrap();
+        let commands_dir = temp.path().join(".commands");
+        fs::create_dir(&commands_dir).unwrap();
+
+        let script = "#!/bin/bash\n#---\n# description: Produces a file\n# artifacts:\n#   - /tmp/out.png\n#---\nexit 0\n";
+        create_executable(&commands_dir.join("shot.sh"), script).unwrap();
+
+        let args = vec!["shot".to_string()];
+        let result = run_with_context(&args, &commands_dir).unwrap();
+        assert_eq!(result, 0);
     }
 
     #[test]
