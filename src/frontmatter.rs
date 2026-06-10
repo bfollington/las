@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use indexmap::IndexMap;
 
 use serde::Deserialize;
 
@@ -12,8 +12,8 @@ pub struct RawFrontmatter {
     #[serde(rename = "on-failure", alias = "on_failure")]
     pub on_failure: Option<String>,
     pub artifacts: Option<Vec<String>>,
-    pub args: Option<BTreeMap<String, RawArg>>,
-    pub flags: Option<BTreeMap<String, RawFlag>>,
+    pub args: Option<IndexMap<String, RawArg>>,
+    pub flags: Option<IndexMap<String, RawFlag>>,
     pub stdin: Option<String>,
 }
 
@@ -286,6 +286,57 @@ echo hi
         let content = "#!/bin/bash\n#---\n# on_failure: try again\n#---\necho hi\n";
         let fm = parse_frontmatter(content).unwrap().unwrap();
         assert_eq!(fm.on_failure.as_deref(), Some("try again"));
+    }
+
+    #[test]
+    fn args_preserve_declaration_order() {
+        // Positional args map by position, so declaration order is load-bearing.
+        // These names are deliberately non-alphabetical: a sorted map would flip
+        // them and break positional mapping (real case: gcall's
+        // node_path/method/json_args sorted to json_args/method/node_path,
+        // making the common two-positional invocation fail required-arg
+        // validation).
+        let content = r#"#!/bin/bash
+#---
+# args:
+#   node_path:
+#     required: true
+#   method:
+#     required: true
+#   json_args:
+#     default: "[]"
+#---
+echo hi
+"#;
+        let cmd = command_from_script("gcall", PathBuf::from("gcall.sh"), content).unwrap();
+        let names: Vec<&str> = cmd.args.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, vec!["node_path", "method", "json_args"]);
+
+        // The end-to-end failure mode: two positionals must satisfy the two
+        // required args, with the trailing optional arg taking its default.
+        let parsed =
+            crate::args::parse_args(&cmd, &["/root/Main".to_string(), "get_tree".to_string()])
+                .unwrap();
+        assert_eq!(
+            parsed.env_args.get("ARG_NODE_PATH"),
+            Some(&"/root/Main".to_string())
+        );
+        assert_eq!(
+            parsed.env_args.get("ARG_METHOD"),
+            Some(&"get_tree".to_string())
+        );
+        assert_eq!(
+            parsed.env_args.get("ARG_JSON_ARGS"),
+            Some(&"[]".to_string())
+        );
+    }
+
+    #[test]
+    fn flags_preserve_declaration_order() {
+        let content = "#!/bin/bash\n#---\n# flags:\n#   zeta:\n#     short: z\n#   alpha:\n#     short: a\n#---\necho hi\n";
+        let cmd = command_from_script("t", PathBuf::from("t.sh"), content).unwrap();
+        let names: Vec<&str> = cmd.flags.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["zeta", "alpha"]);
     }
 
     #[test]
