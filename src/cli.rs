@@ -27,20 +27,37 @@ pub fn run() -> Result<i32> {
 pub fn run_with_args(args: &[String]) -> Result<i32> {
     // Find the .commands directory
     let Some(commands_dir) = find_commands_dir(&env::current_dir()?) else {
+        return run_without_commands_dir(args);
+    };
+
+    run_with_context(args, &commands_dir)
+}
+
+/// Dispatch when no .commands directory was found (outside any project).
+/// Meta-commands that don't conceptually need a project still work; anything
+/// that does (running commands, --list, --which, ...) errors as before.
+fn run_without_commands_dir(args: &[String]) -> Result<i32> {
+    match args.first().map(String::as_str) {
         // --observe is wired into agent hooks that fire after every shell
         // command in every project (see history::CLAUDE_HOOKS_DOCS); hooks run
         // from the session cwd, which often has no .commands/. A nonzero exit
         // here would surface an error in the agent transcript on every shell
         // command, so outside a las project --observe is a silent no-op.
-        if args.first().map(String::as_str) == Some("--observe") {
-            return Ok(0);
+        Some("--observe") => Ok(0),
+        Some("--version") => {
+            println!("las {}", env!("CARGO_PKG_VERSION"));
+            Ok(0)
         }
-        anyhow::bail!(
+        // Bare `las` or `las --help`: show the META flags plus a bootstrap
+        // hint instead of an unhelpful error.
+        None | Some("--help") => {
+            help::print_top_level_help_no_project("las");
+            Ok(0)
+        }
+        _ => anyhow::bail!(
             "No .commands directory found. Run this from a project with a .commands/ directory."
-        );
-    };
-
-    run_with_context(args, &commands_dir)
+        ),
+    }
 }
 
 /// Run with explicit args and commands directory (for testing)
@@ -675,6 +692,55 @@ echo "hello $ARG_NAME"
         let args = vec!["--version".to_string()];
         let result = run_with_context(&args, &commands_dir).unwrap();
         assert_eq!(result, 0);
+    }
+
+    // run_without_commands_dir never touches the process cwd, so these tests
+    // are safe under the parallel test runner.
+
+    #[test]
+    fn test_version_outside_project_exits_zero() {
+        let args = vec!["--version".to_string()];
+        let result = run_without_commands_dir(&args).unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn test_help_outside_project_exits_zero() {
+        let args = vec!["--help".to_string()];
+        let result = run_without_commands_dir(&args).unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn test_no_args_outside_project_exits_zero() {
+        let args = vec![];
+        let result = run_without_commands_dir(&args).unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn test_observe_outside_project_is_silent_noop() {
+        let args = vec![
+            "--observe".to_string(),
+            "git".to_string(),
+            "status".to_string(),
+        ];
+        let result = run_without_commands_dir(&args).unwrap();
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn test_other_flags_outside_project_still_error() {
+        let args = vec!["--list".to_string()];
+        let err = run_without_commands_dir(&args).unwrap_err();
+        assert!(err.to_string().contains("No .commands directory found"));
+    }
+
+    #[test]
+    fn test_commands_outside_project_still_error() {
+        let args = vec!["deploy".to_string()];
+        let err = run_without_commands_dir(&args).unwrap_err();
+        assert!(err.to_string().contains("No .commands directory found"));
     }
 
     #[test]
