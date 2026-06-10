@@ -27,8 +27,11 @@ pub fn run() -> Result<i32> {
 pub fn run_with_args(args: &[String]) -> Result<i32> {
     // Find the .commands directory
     let Some(commands_dir) = find_commands_dir(&env::current_dir()?) else {
-        // --observe is wired into agent hooks that fire in every project;
-        // outside a las project it must be a silent no-op, not an error.
+        // --observe is wired into agent hooks that fire after every shell
+        // command in every project (see history::CLAUDE_HOOKS_DOCS); hooks run
+        // from the session cwd, which often has no .commands/. A nonzero exit
+        // here would surface an error in the agent transcript on every shell
+        // command, so outside a las project --observe is a silent no-op.
         if args.first().map(String::as_str) == Some("--observe") {
             return Ok(0);
         }
@@ -331,6 +334,16 @@ fn handle_meta_command(flag: &str, remaining: &[String], commands_dir: &Path) ->
             println!("{}", crate::json::generate_json(&tree, commands_dir, name));
             Ok(0)
         }
+        // Designed to run as an agent-harness hook after every shell command
+        // (Claude Code: a PostToolUse hook matching "Bash" — payload shape and
+        // lifecycle rules per history::CLAUDE_HOOKS_DOCS). The hook contract
+        // drives this arm's shape: the payload arrives as JSON on stdin, so we
+        // read stdin when no args are given; and since hook exit code 2 feeds
+        // stderr back to Claude as corrective feedback while other nonzero
+        // codes surface stderr in the transcript, every observation path must
+        // exit 0 and print nothing — recording may never inject noise into the
+        // agent loop. (The TTY guard below only fires for interactive misuse,
+        // where a human deserves an explanation, not a hang on stdin.)
         "--observe" => {
             let input = if remaining.is_empty() {
                 use std::io::{IsTerminal, Read};

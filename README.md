@@ -214,7 +214,13 @@ Save one as a command: las --new <name>, then paste the shell line into the scri
 
 Raw shell commands get into the history via `las --observe`, which accepts the command
 as arguments, as a raw line on stdin, or as a Claude Code PostToolUse hook payload
-(it extracts `.tool_input.command` itself). Wire it up once in `.claude/settings.json`:
+(it extracts `.tool_input.command` itself — the payload shape, matcher structure, and
+exit-code semantics come from the
+[Claude Code hooks reference](https://code.claude.com/docs/en/hooks); see also the
+[getting-started guide](https://code.claude.com/docs/en/hooks-guide)). This hook is the
+intended feeder: las can't see shell commands it didn't run, so without it `--suggest`
+still reports command usage but has no extraction candidates. Wire it up once in
+`.claude/settings.json`:
 
 ```json
 {

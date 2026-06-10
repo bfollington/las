@@ -1,3 +1,16 @@
+//! Invocation history and the `--observe`/`--suggest` learning loop.
+//!
+//! Two kinds of entries land in `.commands/.history.jsonl`:
+//!
+//! - **Runs** are recorded automatically every time `las <cmd>` executes —
+//!   no setup needed. They power the usage half of `--suggest`.
+//! - **External** entries (raw shell commands — the extraction candidates)
+//!   only exist if something feeds them to `las --observe`. On its own, las
+//!   cannot see shell commands it didn't run; the intended feeder is an
+//!   agent-harness hook that fires after every shell command. For Claude
+//!   Code that is a `PostToolUse` hook matching the `Bash` tool (see
+//!   [`CLAUDE_HOOKS_DOCS`]); without such a hook installed, `--suggest`
+//!   still reports command usage but has no extraction candidates to offer.
 use crate::command::CommandTree;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -8,6 +21,22 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const HISTORY_FILE: &str = ".history.jsonl";
+
+/// Claude Code hooks reference — the authority for the hook payload shape
+/// parsed by [`parse_observed`] and the lifecycle rules `--observe` follows.
+/// Getting-started guide: <https://code.claude.com/docs/en/hooks-guide>.
+pub const CLAUDE_HOOKS_DOCS: &str = "https://code.claude.com/docs/en/hooks";
+
+/// The settings.json fragment that wires `--observe` into Claude Code,
+/// shown in `--suggest` setup guidance and the skill document.
+/// Structure per [`CLAUDE_HOOKS_DOCS`]: a `PostToolUse` matcher group whose
+/// `matcher` filters by tool name (`"Bash"`), running a `command`-type hook.
+pub fn claude_hook_snippet(name: &str) -> String {
+    format!(
+        "{{\"hooks\": {{\"PostToolUse\": [{{\"matcher\": \"Bash\", \"hooks\": [{{\"type\": \"command\", \"command\": \"{} --observe\"}}]}}]}}}}",
+        name
+    )
+}
 
 /// One line of `.commands/.history.jsonl`
 #[derive(Debug, Serialize, Deserialize)]
@@ -66,7 +95,27 @@ pub fn record_external(commands_dir: &Path, name: &str, command: &str) {
 }
 
 /// Extract the shell command from `--observe` input: either a Claude Code
-/// PostToolUse hook payload (JSON with .tool_input.command) or a raw line.
+/// `PostToolUse` hook payload or a raw command line.
+///
+/// Per the hooks reference ([`CLAUDE_HOOKS_DOCS`]), Claude Code delivers the
+/// hook input as JSON on stdin. For a `Bash` tool call it looks like:
+///
+/// ```json
+/// {
+///   "session_id": "abc123",
+///   "transcript_path": "~/.claude/projects/.../transcript.jsonl",
+///   "cwd": "/Users/my-project",
+///   "hook_event_name": "PostToolUse",
+///   "tool_name": "Bash",
+///   "tool_input": { "command": "npm test" },
+///   "tool_output": { "stdout": "...", "stderr": "" }
+/// }
+/// ```
+///
+/// The shell command we want is `.tool_input.command`, so the hook config
+/// can be just `<name> --observe` with no jq plumbing. Input that parses as
+/// JSON but lacks that field — or doesn't parse at all — is treated as a raw
+/// command line, which keeps `echo 'cmd' | las --observe` working.
 pub fn parse_observed(input: &str) -> Option<String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -96,9 +145,11 @@ pub fn generate_suggest(tree: &CommandTree, commands_dir: &Path, name: &str) -> 
             history_path(commands_dir).display()
         ));
         output.push_str(&format!(
-            "To also track raw shell commands (the extraction candidates), pipe them to `{} --observe` —\n\
-             e.g. a Claude Code PostToolUse hook on Bash: {{\"type\": \"command\", \"command\": \"{} --observe\"}}\n",
-            name, name
+            "To also track raw shell commands (the extraction candidates), pipe them to `{} --observe`.\n\
+             In Claude Code, add this to .claude/settings.json ({}):\n  {}\n",
+            name,
+            CLAUDE_HOOKS_DOCS,
+            claude_hook_snippet(name)
         ));
         return output;
     }
@@ -171,8 +222,10 @@ pub fn generate_suggest(tree: &CommandTree, commands_dir: &Path, name: &str) -> 
         output.push_str("  none yet — repeated raw shell commands (3+ exact runs) show up here.\n");
         if externals.is_empty() {
             output.push_str(&format!(
-                "  (no raw shell commands observed; hook `{} --observe` into your agent to feed this)\n",
-                name
+                "  (no raw shell commands observed — nothing is feeding `{} --observe`.\n   In Claude Code, add this to .claude/settings.json ({}):\n   {})\n",
+                name,
+                CLAUDE_HOOKS_DOCS,
+                claude_hook_snippet(name)
             ));
         }
     } else {
@@ -401,6 +454,31 @@ mod tests {
         let report = generate_suggest(&make_tree(), &dir, "las");
         assert!(report.contains("No history yet"));
         assert!(report.contains("--observe"));
+        // Setup guidance cites the hooks documentation and a paste-ready config
+        assert!(report.contains(CLAUDE_HOOKS_DOCS));
+        assert!(report.contains(&claude_hook_snippet("las")));
+    }
+
+    #[test]
+    fn suggest_with_runs_but_no_externals_explains_the_hook() {
+        let (_temp, dir) = commands_dir();
+        record_run(&dir, "shot", &[], 0, 50);
+
+        let report = generate_suggest(&make_tree(), &dir, "las");
+        assert!(report.contains("nothing is feeding `las --observe`"));
+        assert!(report.contains(CLAUDE_HOOKS_DOCS));
+    }
+
+    #[test]
+    fn hook_snippet_is_valid_json_matching_documented_structure() {
+        // Shape per CLAUDE_HOOKS_DOCS: hooks.PostToolUse[].matcher + hooks[].{type,command}
+        let snippet = claude_hook_snippet("las");
+        let parsed: serde_json::Value = serde_json::from_str(&snippet).unwrap();
+
+        let group = &parsed["hooks"]["PostToolUse"][0];
+        assert_eq!(group["matcher"], "Bash");
+        assert_eq!(group["hooks"][0]["type"], "command");
+        assert_eq!(group["hooks"][0]["command"], "las --observe");
     }
 
     #[test]
