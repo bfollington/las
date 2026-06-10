@@ -142,6 +142,8 @@ las --edit <cmd>            Open the command file in $EDITOR
 las --new <cmd>             Create a new command from template
 las --new <group>/<cmd>     Create inside a group
 las --skill                 Print agent skill document
+las --sync                  Write skill document to .claude/skills/ for agent auto-discovery
+las --json                  Print all command metadata as JSON
 las --completions <shell>   Generate shell completions (bash, zsh, fish)
 las --config                Show configuration
 las --version               Print version
@@ -166,6 +168,25 @@ las --completions fish > ~/.config/fish/completions/las.fish
 
 ```bash
 las --skill | claude "create a command that runs database backups"
+```
+
+Better: `las --sync` writes that document (with skill frontmatter) to
+`.claude/skills/<name>/SKILL.md` next to your `.commands/` directory, so agents like
+Claude Code discover the whole command vocabulary automatically — zero turns spent on
+`--help`, no reliance on the agent remembering to look. Re-run it after adding or
+changing commands (or wire it into a `_hooks.sh` `after()` for `--new`):
+
+```bash
+las --sync
+# Wrote /path/to/project/.claude/skills/las/SKILL.md
+```
+
+For tooling that wants structure instead of prose, `las --json` dumps every command's
+full metadata — path, invocation, description, usage, args/flags with choices and
+defaults, artifacts, failure hints, script path — as JSON:
+
+```bash
+las --json | jq -r '.commands[].invocation'
 ```
 
 ## Hooks

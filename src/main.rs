@@ -6,9 +6,11 @@ mod discovery;
 mod frontmatter;
 mod help;
 mod hooks;
+mod json;
 mod new;
 mod runner;
 mod skill;
+mod sync;
 
 fn main() {
     let code = cli::run().unwrap_or_else(|err| {
