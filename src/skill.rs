@@ -73,6 +73,39 @@ pub fn generate_skill(tree: &CommandTree, commands_dir: &Path, name: &str) -> St
     output.push_str(&format!("- `{} --edit <cmd>` — Open in $EDITOR\n", name));
     output.push_str(&format!("- `{} --which <cmd>` — Print file path\n\n", name));
 
+    // Learning Loop
+    output.push_str("## Learning Loop\n\n");
+    output.push_str(&format!(
+        "Every `{}` run is recorded to `.commands/.history.jsonl`. At natural checkpoints, run:\n\n",
+        name
+    ));
+    output.push_str(&format!("```\n{} --suggest\n```\n\n", name));
+    output.push_str(
+        "It reports per-command usage and raw shell commands repeated often enough to deserve\n",
+    );
+    output.push_str(&format!(
+        "extraction into a command of their own (`{} --new <name>`).\n\n",
+        name
+    ));
+    output.push_str(&format!(
+        "Raw shell commands only enter the history if they are piped to `{} --observe` — \
+         without that, the extraction-candidate half of `--suggest` stays empty. In Claude Code, \
+         install a PostToolUse hook on the Bash tool (reference: {}):\n\n",
+        name,
+        crate::history::CLAUDE_HOOKS_DOCS
+    ));
+    output.push_str(&format!(
+        "```json\n{}\n```\n\n",
+        crate::history::claude_hook_snippet(name)
+    ));
+    output.push_str(&format!(
+        "`{} --observe` reads the hook payload on stdin and extracts `.tool_input.command` itself. \
+         It always exits 0 and prints nothing (PostToolUse exit code 2 would feed stderr back to \
+         the model), and outside a `{}` project it is a no-op, so the hook is safe to install \
+         globally.\n\n",
+        name, name
+    ));
+
     // Best Practices
     output.push_str("## Best Practices\n\n");
     output.push_str("- Prefer small, composable commands\n");
@@ -422,6 +455,19 @@ mod tests {
         assert!(skill.contains("on-failure:"));
         assert!(skill.contains("artifacts:"));
         assert!(skill.contains("variadic: true"));
+    }
+
+    #[test]
+    fn skill_doc_teaches_learning_loop() {
+        let tree = make_simple_tree();
+        let skill = generate_skill(&tree, Path::new("/test/.commands"), "las");
+
+        assert!(skill.contains("## Learning Loop"));
+        assert!(skill.contains("las --suggest"));
+        // Agents need the hook config and its source documentation to set up
+        // the feeder for extraction candidates
+        assert!(skill.contains(crate::history::CLAUDE_HOOKS_DOCS));
+        assert!(skill.contains(&crate::history::claude_hook_snippet("las")));
     }
 
     #[test]

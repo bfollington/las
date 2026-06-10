@@ -144,6 +144,8 @@ las --new <group>/<cmd>     Create inside a group
 las --skill                 Print agent skill document
 las --sync                  Write skill document to .claude/skills/ for agent auto-discovery
 las --json                  Print all command metadata as JSON
+las --suggest               Report command usage + repeated shell commands worth extracting
+las --observe [cmd]         Record an external shell command for --suggest (args or stdin)
 las --completions <shell>   Generate shell completions (bash, zsh, fish)
 las --config                Show configuration
 las --version               Print version
@@ -188,6 +190,56 @@ defaults, artifacts, failure hints, script path — as JSON:
 ```bash
 las --json | jq -r '.commands[].invocation'
 ```
+
+## The learning loop: history and `--suggest`
+
+Every `las <cmd>` run is appended to `.commands/.history.jsonl` (kept out of version
+control via an auto-maintained `.commands/.gitignore`). `las --suggest` reads it and
+reports which commands earn their keep, which are never used, and — the interesting
+part — which **raw shell commands repeat often enough to deserve extraction** into a
+command of their own:
+
+```
+COMMAND USAGE
+  gconsole        42 runs
+  shot            17 runs, 2 failed
+  never used:     gcall
+
+EXTRACTION CANDIDATES (repeated raw shell commands)
+    9x  pkill -f "MacOS/Godot --remote-debug"
+    4x  rg TODO scripts/
+
+Save one as a command: las --new <name>, then paste the shell line into the script.
+```
+
+Raw shell commands get into the history via `las --observe`, which accepts the command
+as arguments, as a raw line on stdin, or as a Claude Code PostToolUse hook payload
+(it extracts `.tool_input.command` itself — the payload shape, matcher structure, and
+exit-code semantics come from the
+[Claude Code hooks reference](https://code.claude.com/docs/en/hooks); see also the
+[getting-started guide](https://code.claude.com/docs/en/hooks-guide)). This hook is the
+intended feeder: las can't see shell commands it didn't run, so without it `--suggest`
+still reports command usage but has no extraction candidates. Wire it up once in
+`.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "las --observe" }]
+      }
+    ]
+  }
+}
+```
+
+Agents are bad at noticing repetition across sessions — each one starts amnesiac.
+The history makes repetition a queryable fact: an agent (or you) runs `las --suggest`
+and the case for extracting a new command is already made. `--observe` is safe to hook
+globally: outside a las project it's a silent no-op, and invocations of `las` itself
+are skipped (they're already recorded as runs).
 
 ## Hooks
 
